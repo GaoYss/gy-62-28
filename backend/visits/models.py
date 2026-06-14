@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError
 from django.db import models
 
 from backend.appointments.models import Appointment
@@ -15,6 +16,11 @@ class VisitRecord(models.Model):
 
     class Meta:
         ordering = ["-check_in_time"]
+
+    def clean(self):
+        super().clean()
+        if self.check_out_time and self.check_in_time and self.check_out_time < self.check_in_time:
+            raise ValidationError({"check_out_time": "签退时间不能早于签到时间"})
 
     def __str__(self):
         return f"{self.appointment.family_name} {self.check_in_time:%Y-%m-%d %H:%M}"
