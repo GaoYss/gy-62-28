@@ -53,9 +53,14 @@ def list_visits():
     return [serialize_visit(item) for item in queryset]
 
 
+BLOCKED_STATUSES = {"rejected", "cancelled"}
+
+
 def create_visit(payload):
     data = normalize_payload(payload)
-    Appointment.objects.get(pk=data["appointment_id"])
+    appointment = Appointment.objects.get(pk=data["appointment_id"])
+    if appointment.status in BLOCKED_STATUSES:
+        raise ValueError(f"当前预约状态为「{appointment.get_status_display()}」，不允许签到")
     return VisitRecord(**data)
 
 
@@ -63,7 +68,6 @@ def update_visit(record, payload):
     data = normalize_payload(payload)
     for field, value in data.items():
         setattr(record, field, value)
-    record.save()
     return record
 
 

@@ -185,6 +185,32 @@ class VisitServiceCreateTests(TestCase):
         with self.assertRaises(Appointment.DoesNotExist):
             create_visit(payload)
 
+    def test_create_visit_rejected_appointment_raises(self):
+        r = _make_resident()
+        a = _make_appointment(resident=r, status="rejected")
+        payload = {
+            "appointment_id": a.pk,
+            "check_in_time": "2025-06-15T09:00:00+08:00",
+            "staff_name": "护工甲",
+        }
+        with self.assertRaises(ValueError) as ctx:
+            create_visit(payload)
+        self.assertIn("已拒绝", str(ctx.exception))
+        self.assertIn("不允许签到", str(ctx.exception))
+
+    def test_create_visit_cancelled_appointment_raises(self):
+        r = _make_resident()
+        a = _make_appointment(resident=r, status="cancelled")
+        payload = {
+            "appointment_id": a.pk,
+            "check_in_time": "2025-06-15T09:00:00+08:00",
+            "staff_name": "护工甲",
+        }
+        with self.assertRaises(ValueError) as ctx:
+            create_visit(payload)
+        self.assertIn("已取消", str(ctx.exception))
+        self.assertIn("不允许签到", str(ctx.exception))
+
 
 class VisitServiceSerializeTests(TestCase):
     def test_serialize_visit_check_out_time_none(self):
@@ -275,6 +301,8 @@ class VisitServiceUpdateTests(TestCase):
             staff_name="护工甲",
         )
         updated = update_visit(v, {"visitor_temperature": "37.2"})
+        updated.full_clean()
+        updated.save()
         v.refresh_from_db()
         self.assertEqual(v.visitor_temperature, Decimal("37.2"))
 
@@ -286,7 +314,9 @@ class VisitServiceUpdateTests(TestCase):
             check_in_time=timezone.now(),
             staff_name="护工甲",
         )
-        update_visit(v, {"summary": "探视顺利"})
+        updated = update_visit(v, {"summary": "探视顺利"})
+        updated.full_clean()
+        updated.save()
         v.refresh_from_db()
         self.assertEqual(v.summary, "探视顺利")
 
@@ -484,6 +514,28 @@ class VisitViewUpdateTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["summary"], "老人情绪良好")
 
+    def test_update_visit_check_out_before_check_in_rejected(self):
+        check_out_str = (self.check_in - timedelta(hours=1)).isoformat()
+        resp = self.client.put(
+            f"/api/visits/{self.record.pk}/",
+            data={"check_out_time": check_out_str},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        body = resp.json()
+        self.assertIn("签退时间不能早于签到时间", str(body.get("error", "")))
+
+    def test_update_visit_check_out_before_check_in_does_not_save(self):
+        original_check_out = self.record.check_out_time
+        check_out_str = (self.check_in - timedelta(hours=1)).isoformat()
+        self.client.put(
+            f"/api/visits/{self.record.pk}/",
+            data={"check_out_time": check_out_str},
+            content_type="application/json",
+        )
+        self.record.refresh_from_db()
+        self.assertEqual(self.record.check_out_time, original_check_out)
+
 
 class VisitViewListAndDetailTests(TestCase):
     def test_get_visits_list(self):
@@ -607,3 +659,37 @@ class VisitFlowStatusTransitionTests(TestCase):
             content_type="application/json",
         )
         self.assertEqual(resp.status_code, 400)
+
+    def test_rejected_appointment_cannot_create_visit(self):
+        r = _make_resident()
+        a = _make_appointment(resident=r, status="rejected")
+        resp = self.client.post(
+            "/api/visits/",
+            data={
+                "appointment_id": a.pk,
+                "check_in_time": "2025-06-15T09:00:00+08:00",
+                "staff_name": "护工甲",
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        body = resp.json()
+        self.assertIn("已拒绝", body.get("error", ""))
+        self.assertIn("不允许签到", body.get("error", ""))
+
+    def test_cancelled_appointment_cannot_create_visit(self):
+        r = _make_resident()
+        a = _make_appointment(resident=r, status="cancelled")
+        resp = self.client.post(
+            "/api/visits/",
+            data={
+                "appointment_id": a.pk,
+                "check_in_time": "2025-06-15T09:00:00+08:00",
+                "staff_name": "护工甲",
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        body = resp.json()
+        self.assertIn("已取消", body.get("error", ""))
+        self.assertIn("不允许签到", body.get("error", ""))
